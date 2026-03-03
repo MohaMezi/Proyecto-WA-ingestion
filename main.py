@@ -191,6 +191,7 @@ _TOO_MANY_MESSAGES_THRESHOLD = int(os.environ.get("TOO_MANY_MESSAGES_THRESHOLD",
 _TOO_MANY_MESSAGES_TIME_SECONDS = int(os.environ.get("TOO_MANY_MESSAGES_TIME_SECONDS", 2))  # Número de segundos en los que se cuentan los mensajes pendientes para determinar si hay "demasiados mensajes pendientes".
 _DYNAMODB_TABLE_PREFIX = os.environ.get("DYNAMODB_TABLE_PREFIX", _ENV)  # Prefijo para nombres de tablas DynamoDB.
 _QUEUE_URL = os.environ.get("QUEUE_URL", "")  # URL de la cola de SQS a la que se enviarán los mensajes para procesamiento asíncrono.
+_SQS_DELAY_SECONDS = int(os.environ.get("SQS_DELAY_SECONDS", 10))  # Número de segundos de delay al enviar mensajes a SQS.
 
 sm = boto3.client("ssm") # Cliente de AWS Systems Manager Parameter Store.
 dynamodb = boto3.resource("dynamodb") # Recurso de DynamoDB para tratar datos.
@@ -783,6 +784,7 @@ def persist_message(tenant_id: str, channel_id: str, message_id: str, user_id: s
         )
         sqs_response = sqs.send_message(
           QueueUrl=_QUEUE_URL,
+          DelaySeconds=_SQS_DELAY_SECONDS,
           MessageBody=json.dumps({
             "channel_id": channel_id,
             "user_id": user_id,
