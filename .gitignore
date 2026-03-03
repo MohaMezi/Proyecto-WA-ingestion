@@ -46,3 +46,4 @@ docker-compose.*.yaml
 # Local test / infra files
 prueba_signature.py
 trust-policy.json
+GUIA.md

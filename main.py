@@ -171,6 +171,7 @@ import logging
 import json
 
 import os # Librería para manejar variables de entorno.
+from typing import Any # Para anotaciones de tipos genéricos (por ejemplo, dict[str, Any]).
 
 import requests # Librería para hacer peticiones HTTP (en caso de querer enviar respuestas a los usuarios).
 
@@ -212,7 +213,7 @@ _CHANNELS_CACHE = {} # channel_id -> tenant_id  -- Cache para mapear channel_id 
 _GRAPH_BASE = f"https://graph.facebook.com/{_GRAPH_VERSION}" # Base URL para la API de Meta Graph.
 
 # Handler principal para AWS Lambda.
-def handler(event, context):
+def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
   """
   Punto de entrada para AWS Lambda.
 
@@ -228,6 +229,9 @@ def handler(event, context):
   
   Retorno:
     dict: Estructura con 'statusCode' y 'body' compatible con integraciones de Lambda+API Gateway.
+
+  Excepciones:
+    Exception: Se propaga cualquier error inesperado en extracción de datos o routing.
   """
   try:
     # La estructura del evento recibido desde API Gateway v2 está en la línea 75 del código. 
@@ -262,7 +266,7 @@ def handler(event, context):
     raise
 
 # Procesar la verificación del webhook de Meta.
-def process_get(raw_qs) -> dict:
+def process_get(raw_qs: str) -> dict[str, Any]:
   """
   Procesa la petición GET para verificación del webhook (hub.challenge).
 
@@ -277,6 +281,10 @@ def process_get(raw_qs) -> dict:
 
   Retorno:
     dict: {'statusCode': int, 'body': str}
+
+  Excepciones:
+    botocore.exceptions.ClientError: Si falla la lectura del token en Parameter Store.
+    Exception: Cualquier error inesperado no controlado explícitamente.
   """
   params = parse_qs(raw_qs)
   
@@ -299,7 +307,7 @@ def process_get(raw_qs) -> dict:
     return {"statusCode": 403, "body": "Forbidden"}
   
 # Procesar la recepción de un webhook de Meta.
-def process_post(event) -> dict:
+def process_post(event: dict[str, Any]) -> dict[str, Any]:
   """
   Procesa peticiones POST entrantes desde Meta (WhatsApp, Messenger o Instagram).
 
@@ -316,6 +324,9 @@ def process_post(event) -> dict:
   
   Retorno:
     dict: Respuesta HTTP simulada para API Gateway, p.ej. {'statusCode': 200, 'body': 'OK'}.
+
+  Excepciones:
+    No propaga excepciones por defecto: captura errores operativos y devuelve respuesta HTTP.
   """
   # La estructura de los webhooks de Meta está en las líneas 2 y 50 del código.
   headers = event.get("headers") or {}
@@ -397,7 +408,7 @@ def process_post(event) -> dict:
     return {"statusCode": 500, "body": "Internal Server Error"}
 
 # Función para obtener el channel_id a partir del body del webhook, dependiendo del tipo de canal (WhatsApp, Instagram o Messenger).
-def get_channel_id(body) -> str:
+def get_channel_id(body: dict[str, Any]) -> str:
   """
   Extrae el identificador del canal desde el body del webhook.
 
@@ -410,6 +421,9 @@ def get_channel_id(body) -> str:
          - "ms:{page_id}" para Messenger,
          - "ig:{page_id}" para Instagram,
          o "unknown" si no se pudo extraer.
+
+  Excepciones:
+    No propaga excepciones: captura errores de parsing y retorna "unknown".
   """
   try:
     obj = body.get("object", "") if isinstance(body, dict) else ""
@@ -439,7 +453,7 @@ def get_channel_id(body) -> str:
   return "unknown"
 
 # Función para obtener el message_id a partir del body del webhook, dependiendo del tipo de canal (WhatsApp, Instagram o Messenger).
-def get_message_id(body, channel_id) -> str:
+def get_message_id(body: dict[str, Any], channel_id: str) -> str:
   """
   Extrae el identificador del mensaje del webhook.
 
@@ -449,6 +463,9 @@ def get_message_id(body, channel_id) -> str:
 
   Retorno:
     str: message_id extraído o "unknown" si no se encuentra.
+
+  Excepciones:
+    No propaga excepciones: captura errores de parsing y retorna "unknown".
   """
   try:
     if channel_id.startswith("wa:"):
@@ -475,7 +492,7 @@ def get_message_id(body, channel_id) -> str:
   return "unknown"
 
 # Función para obtener el sender_id a partir del body del webhook, dependiendo del tipo de canal (WhatsApp, Instagram o Messenger).
-def get_sender_id(body, channel_id) -> str:
+def get_sender_id(body: dict[str, Any], channel_id: str) -> str:
   """
   Extrae el identificador del remitente (usuario que envió el mensaje).
 
@@ -488,6 +505,9 @@ def get_sender_id(body, channel_id) -> str:
          - Número de teléfono (formato internacional) para WhatsApp.
          - PSID (Page-Scoped ID) para Messenger/Instagram.
          - "unknown" si no se encuentra.
+
+  Excepciones:
+    No propaga excepciones: captura errores de parsing y retorna "unknown".
   """
   try:
     if channel_id.startswith("wa:"):
@@ -513,7 +533,7 @@ def get_sender_id(body, channel_id) -> str:
   return "unknown"
 
 # Función para obtener el message_body a partir del body del webhook, dependiendo del tipo de canal (WhatsApp, Instagram o Messenger).
-def get_message_body(body, channel_id) -> str:
+def get_message_body(body: dict[str, Any], channel_id: str) -> str:
   """
   Extrae el texto del mensaje recibido.
 
@@ -523,6 +543,9 @@ def get_message_body(body, channel_id) -> str:
 
   Retorno:
     str: Texto del mensaje o cadena vacía si no se encuentra.
+
+  Excepciones:
+    No propaga excepciones: captura errores de parsing y retorna cadena vacía.
   """
   try:
     if channel_id.startswith("wa:"):
@@ -623,7 +646,7 @@ def post_reply(url: str, token: str, payload: dict) -> dict:
     r.raise_for_status()
     return r.json()
 
-def persist_message(tenant_id, channel_id, message_id, user_id, body) -> dict:
+def persist_message(tenant_id: str, channel_id: str, message_id: str, user_id: str, body: dict[str, Any]) -> dict[str, Any]:
   """
   Persiste el mensaje en DynamoDB con lógica de deduplicación y actualización/creación de conversación.
 
