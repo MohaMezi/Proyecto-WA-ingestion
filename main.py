@@ -1053,9 +1053,33 @@ def persist_message(
             )
             return {"statusCode": 400, "body": "Bad Request"}
 
+        # 1) Leer conversación existente (fuera de transacción)
+        resp = conversations_table.get_item(
+            Key={"channel_id": channel_id, "user_id": user_id}
+        )
+        
+        existing_item = resp.get("Item", {})
+        pending_msgs = existing_item.get("pending_messages", [])
+        message_times = existing_item.get("message_times", [])
+        
+        # Asegurar que sean listas (por si existen corruptos como Maps)
+        if not isinstance(pending_msgs, list):
+            pending_msgs = []
+        if not isinstance(message_times, list):
+            message_times = []
+        
+        # Append nuevos valores para la transacción
+        pending_msgs.append(message_text)
+        message_times.append(now)
+        
+        # Convertir a formato DynamoDB low-level para transact_write_items
+        pending_msgs_dynamo = {"L": [{"S": msg} for msg in pending_msgs]}
+        message_times_dynamo = {"L": [{"N": str(ts)} for ts in message_times]}
+
+        # 2) Transacción atómica: deduplicación + guardar conversación
         dynamodb.meta.client.transact_write_items(
             TransactItems=[
-                # 1) Deduplicación: insertar solo si no existe (channel_id, message_id)
+                # Deduplicación: insertar solo si no existe (channel_id, message_id)
                 {
                     "Put": {
                         "TableName": deduplication_table.name,
@@ -1068,8 +1092,7 @@ def persist_message(
                         "ConditionExpression": "attribute_not_exists(channel_id)",
                     }
                 },
-                # 2) Upsert conversation: si existe, append + actualizar tiempos/estado.
-                #    si no existe, se crea con esos valores.
+                # Conversación: actualizar con valores previamente fusionados en Python
                 {
                     "Update": {
                         "TableName": conversations_table.name,
@@ -1079,8 +1102,8 @@ def persist_message(
                         },
                         "UpdateExpression": (
                             "SET "
-                            "#pending = list_append(if_not_exists(#pending, :empty_list), :new_msgs), "
-                            "#times = list_append(if_not_exists(#times, :empty_list), :new_times), "
+                            "#pending = :pending_msgs, "
+                            "#times = :message_times, "
                             "#status = :waiting, "
                             "#last_time = :now, "
                             "#expires = :expires_at"
@@ -1093,9 +1116,8 @@ def persist_message(
                             "#expires": "expires_at",
                         },
                         "ExpressionAttributeValues": {
-                            ":empty_list": {"L": []},
-                            ":new_msgs": {"L": [{"S": message_text}]},
-                            ":new_times": {"L": [{"N": str(now)}]},
+                            ":pending_msgs": pending_msgs_dynamo,
+                            ":message_times": message_times_dynamo,
                             ":waiting": {"S": "waiting"},
                             ":now": {"N": str(now)},
                             ":expires_at": {"N": str(expires_at)},
