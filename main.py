@@ -1142,18 +1142,17 @@ def persist_message(
             )
         else:
             try:
-                dynamodb.meta.client.update_item(
-                    TableName=conversations_table.name,
+                conversations_table.update_item(
                     Key={
-                        "channel_id": {"S": channel_id},
-                        "user_id": {"S": user_id},
+                        "channel_id": channel_id,
+                        "user_id": user_id,
                     },
                     ConditionExpression="attribute_not_exists(queued) OR queued = :f",
                     UpdateExpression="SET queued = :q, queue_id = :mid",
                     ExpressionAttributeValues={
-                        ":q": {"BOOL": True},
-                        ":f": {"BOOL": False},
-                        ":mid": {"S": message_id},
+                        ":q": True,
+                        ":f": False,
+                        ":mid": message_id,
                     },
                 )
                 sqs_response = sqs.send_message(
@@ -1184,18 +1183,15 @@ def persist_message(
                         )
                     )
                     # Si falla el envío a SQS, se podría considerar marcar la conversación como no encolada para reintentar después, pero eso dependería de la lógica de reintentos que se quiera implementar.
-                    dynamodb.meta.client.update_item(
-                        TableName=conversations_table.name,
+                    conversations_table.update_item(
                         Key={
-                            "channel_id": {"S": channel_id},
-                            "user_id": {"S": user_id},
+                            "channel_id": channel_id,
+                            "user_id": user_id,
                         },
                         UpdateExpression="SET queued = :q, queue_id = :mid",
                         ExpressionAttributeValues={
-                            ":q": {"BOOL": False},
-                            ":mid": {
-                                "S": "0000000000000000000"
-                            },  # Un valor de message_id que indique que no se ha podido encolar, para diferenciarlo de los mensajes que sí están encolados pero aún no procesados.
+                            ":q": False,
+                            ":mid": "0000000000000000000",  # Un valor de message_id que indique que no se ha podido encolar, para diferenciarlo de los mensajes que sí están encolados pero aún no procesados.
                         },
                     )
                     return {"statusCode": 500, "body": "Internal Server Error"}
@@ -1204,14 +1200,13 @@ def persist_message(
                     e.response.get("Error", {}).get("Code")
                     == "ConditionalCheckFailedException"
                 ):
-                    dynamodb.meta.client.update_item(
-                        TableName=conversations_table.name,
+                    conversations_table.update_item(
                         Key={
-                            "channel_id": {"S": channel_id},
-                            "user_id": {"S": user_id},
+                            "channel_id": channel_id,
+                            "user_id": user_id,
                         },
                         UpdateExpression="SET queue_id = :mid",
-                        ExpressionAttributeValues={":mid": {"S": message_id}},
+                        ExpressionAttributeValues={":mid": message_id},
                     )
 
         return {"statusCode": 200, "body": "OK"}
@@ -1308,7 +1303,7 @@ def get_tenant_info(tenant_id: str) -> dict:
 
     Retorno:
       dict: Diccionario con información del tenant (service_status, inactive_message, etc.)
-           obtenida de DynamoDB en formato de bajo nivel (con tipos DynamoDB).
+           obtenida de DynamoDB en formato Python nativo.
            Devuelve dict vacío si no se encuentra en caché ni en DynamoDB.
 
     Nota:
@@ -1326,9 +1321,7 @@ def get_tenant_info(tenant_id: str) -> dict:
 
     # Obtener desde DynamoDB si no está en cache o ha expirado.
     try:
-        resp = dynamodb.meta.client.get_item(
-            TableName=tenants_table.name, Key={"tenant_id": {"S": tenant_id}}
-        )
+        resp = tenants_table.get_item(Key={"tenant_id": tenant_id})
         tenant_info = resp.get("Item", {})
         _TENANTS_CACHE[tenant_id] = (tenant_info, now)  # Guardar en cache local
         return tenant_info
@@ -1365,7 +1358,7 @@ def get_channel_info(channel_id: str) -> dict:
 
     Retorno:
       dict: Diccionario con información del canal (incluyendo tenant_id, settings, etc.)
-           obtenida de DynamoDB en formato de bajo nivel (con tipos DynamoDB).
+           obtenida de DynamoDB en formato Python nativo.
            Devuelve dict vacío si no se encuentra en caché ni en DynamoDB.
 
     Nota:
@@ -1436,15 +1429,11 @@ def is_user_blocked(user_id: str, channel_id: str) -> bool:
             return False
 
         # Obtener la lista de usuarios bloqueados desde el campo 'blocked_users'
-        blocked_users_data = channel_info.get("blocked_users", {"L": []})
-        blocked_users_list = blocked_users_data.get("L", [])
+        # blocked_users es una lista Python nativa (resultado de high-level API)
+        blocked_users_list = channel_info.get("blocked_users", [])
 
         # Verificar si el user_id está en la lista de usuarios bloqueados
-        for blocked_user in blocked_users_list:
-            if blocked_user.get("S") == user_id:
-                return True
-
-        return False
+        return user_id in blocked_users_list
     except ClientError as e:
         logger.warning(
             json.dumps(
@@ -1493,9 +1482,8 @@ def check_and_block_if_too_many_messages(user_id: str, channel_id: str) -> bool:
         time_threshold = now - _TOO_MANY_MESSAGES_TIME_SECONDS
 
         # Obtener el registro de conversación actual
-        resp = dynamodb.meta.client.get_item(
-            TableName=conversations_table.name,
-            Key={"channel_id": {"S": channel_id}, "user_id": {"S": user_id}},
+        resp = conversations_table.get_item(
+            Key={"channel_id": channel_id, "user_id": user_id}
         )
 
         # Si no hay conversación previa, es el primer mensaje (no bloquear)
@@ -1505,14 +1493,15 @@ def check_and_block_if_too_many_messages(user_id: str, channel_id: str) -> bool:
         item = resp["Item"]
 
         # Obtener los timestamps de los mensajes recientes
-        message_times_list = item.get("message_times", {"L": []}).get("L", [])
+        # message_times es una lista Python nativa (resultado de high-level API)
+        message_times_list = item.get("message_times", [])
 
         # Contar cuántos mensajes fueron enviados en los últimos _TOO_MANY_MESSAGES_TIME_SECONDS segundos
         recent_message_count = 0
-        for ts_item in message_times_list:
+        for ts in message_times_list:
             try:
-                ts = int(ts_item.get("N", 0))
-                if ts > time_threshold:
+                ts_float = float(ts) if isinstance(ts, (int, float, str)) else 0
+                if ts_float > time_threshold:
                     recent_message_count += 1
             except (ValueError, TypeError):
                 continue
@@ -1526,25 +1515,20 @@ def check_and_block_if_too_many_messages(user_id: str, channel_id: str) -> bool:
             channel_info = get_channel_info(channel_id)
 
             # Obtener la lista actual de usuarios bloqueados
-            blocked_users_data = channel_info.get("blocked_users", {"L": []})
-            blocked_users_list = blocked_users_data.get("L", [])
+            # blocked_users es una lista Python nativa (resultado de high-level API)
+            blocked_users_list = channel_info.get("blocked_users", [])
 
             # Verificar si el usuario ya está bloqueado
-            is_already_blocked = any(
-                blocked_user.get("S") == user_id for blocked_user in blocked_users_list
-            )
-
-            if not is_already_blocked:
+            if user_id not in blocked_users_list:
                 # Agregar el usuario a la lista de bloqueados
-                blocked_users_list.append({"S": user_id})
+                blocked_users_list.append(user_id)
 
                 # Actualizar la tabla channels con la nueva lista de usuarios bloqueados
-                dynamodb.meta.client.update_item(
-                    TableName=channels_table.name,
-                    Key={"channel_id": {"S": channel_id}},
+                channels_table.update_item(
+                    Key={"channel_id": channel_id},
                     UpdateExpression="SET blocked_users = :blocked_users",
                     ExpressionAttributeValues={
-                        ":blocked_users": {"L": blocked_users_list}
+                        ":blocked_users": blocked_users_list
                     },
                 )
 
