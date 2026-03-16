@@ -219,7 +219,7 @@ _SQS_DELAY_SECONDS = int(
 )  # Número de segundos de delay al enviar mensajes a SQS.
 
 sm = boto3.client("ssm")
-dynamodb = boto3.resource("dynamodb")
+dynamodb = boto3.client("dynamodb")
 sqs = boto3.client("sqs")
 
 conversations_table = dynamodb.Table(f"{_DYNAMODB_TABLE_PREFIX}-conversations")
@@ -353,9 +353,7 @@ def process_get(raw_qs: str) -> dict[str, Any]:
     )
     challenge = params.get("hub.challenge")[0] if params.get("hub.challenge") else None
 
-    VERIFY_TOKEN = get_secret(
-        f"/{_ENV}/meta_verify_token"
-    )  # El token de verificación se almacena en Parameter Store bajo la clave "meta_verify_token" dentro del entorno correspondiente (dev, prod, etc.).
+    VERIFY_TOKEN = get_secret(f"/{_ENV}/meta_verify_token") # El token de verificación se almacena en Parameter Store bajo la clave "meta_verify_token" dentro del entorno correspondiente (dev, prod, etc.).
 
     if not VERIFY_TOKEN or VERIFY_TOKEN == "unknown":
         logger.warning(
@@ -382,7 +380,6 @@ def process_get(raw_qs: str) -> dict[str, Any]:
             )
         )
         return {"statusCode": 403, "body": "Forbidden"}
-
 
 # Procesar la recepción de un webhook de Meta.
 def process_post(event: dict[str, Any]) -> dict[str, Any]:
