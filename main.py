@@ -591,6 +591,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
                     "channel_id": channel_id,
                     "user_id": user_id,
                     "message_id": message_id,
+                    "tenant_id": tenant_id,
                 }
             )
         )
@@ -616,6 +617,17 @@ def get_channel_id(body: dict[str, Any]) -> str:
       No propaga excepciones: captura errores de parsing y retorna "unknown".
     """
     try:
+        # Soporte para payload recortado de Meta (sin envelope object/entry).
+        if (
+            isinstance(body, dict)
+            and body.get("field") == "messages"
+            and isinstance(body.get("value"), dict)
+        ):
+            value = body.get("value", {})
+            if value.get("messaging_product") == "whatsapp":
+                phone_number_id = value.get("metadata", {}).get("phone_number_id")
+                return "wa:" + (phone_number_id or "unknown")
+
         obj = body.get("object", "") if isinstance(body, dict) else ""
         if isinstance(obj, str) and "whatsapp_business_account" in obj:
             entry = body.get("entry") if isinstance(body.get("entry"), list) else []
@@ -689,6 +701,20 @@ def get_message_id(body: dict[str, Any], channel_id: str) -> str:
       No propaga excepciones: captura errores de parsing y retorna "unknown".
     """
     try:
+        # Soporte para payload recortado de Meta (sin envelope object/entry).
+        if (
+            channel_id.startswith("wa:")
+            and isinstance(body, dict)
+            and body.get("field") == "messages"
+            and isinstance(body.get("value"), dict)
+        ):
+            messages = body.get("value", {}).get("messages")
+            first_message = (
+                messages[0] if isinstance(messages, list) and len(messages) > 0 else {}
+            )
+            mid = first_message.get("id") if isinstance(first_message, dict) else None
+            return mid or "unknown"
+
         if channel_id.startswith("wa:"):
             entry = body.get("entry") if isinstance(body.get("entry"), list) else []
             first = entry[0] if len(entry) > 0 and isinstance(entry[0], dict) else {}
@@ -770,6 +796,22 @@ def get_sender_id(body: dict[str, Any], channel_id: str) -> str:
       No propaga excepciones: captura errores de parsing y retorna "unknown".
     """
     try:
+        # Soporte para payload recortado de Meta (sin envelope object/entry).
+        if (
+            channel_id.startswith("wa:")
+            and isinstance(body, dict)
+            and body.get("field") == "messages"
+            and isinstance(body.get("value"), dict)
+        ):
+            messages = body.get("value", {}).get("messages")
+            first_message = (
+                messages[0] if isinstance(messages, list) and len(messages) > 0 else {}
+            )
+            sender = (
+                first_message.get("from") if isinstance(first_message, dict) else None
+            )
+            return sender or "unknown"
+
         if channel_id.startswith("wa:"):
             entry = body.get("entry") if isinstance(body.get("entry"), list) else []
             first = entry[0] if len(entry) > 0 and isinstance(entry[0], dict) else {}
@@ -847,6 +889,24 @@ def get_message_body(body: dict[str, Any], channel_id: str) -> str:
       No propaga excepciones: captura errores de parsing y retorna cadena vacía.
     """
     try:
+        # Soporte para payload recortado de Meta (sin envelope object/entry).
+        if (
+            channel_id.startswith("wa:")
+            and isinstance(body, dict)
+            and body.get("field") == "messages"
+            and isinstance(body.get("value"), dict)
+        ):
+            messages = body.get("value", {}).get("messages")
+            first_message = (
+                messages[0] if isinstance(messages, list) and len(messages) > 0 else {}
+            )
+            text = (
+                first_message.get("text", {}).get("body")
+                if isinstance(first_message, dict)
+                else None
+            )
+            return text or ""
+
         if channel_id.startswith("wa:"):
             entry = body.get("entry") if isinstance(body.get("entry"), list) else []
             first = entry[0] if len(entry) > 0 and isinstance(entry[0], dict) else {}
@@ -1167,6 +1227,17 @@ def persist_message(
         if (
             service_status != _ACTIVE_SERVICE_STATUS
         ):  # Si el servicio no está activo, enviar un mensaje al usuario informando que el servicio no está disponible temporalmente.
+            logger.warning(
+                json.dumps(
+                    {
+                        "message": "El tenant asociado al canal no está activo.",
+                        "tenant_id": tenant_id,
+                        "channel_id": channel_id,
+                        "service_status": service_status,
+                    }
+                )
+            )
+            
             inactive_message = tenant_info.get("inactive_message", "unknown")
 
             if not inactive_message or inactive_message == "unknown":
@@ -1180,16 +1251,6 @@ def persist_message(
             else:
                 send_ms_ig_reply(access_token, user_id, inactive_message)
 
-            logger.warning(
-                json.dumps(
-                    {
-                        "message": "El tenant asociado al canal no está activo.",
-                        "tenant_id": tenant_id,
-                        "channel_id": channel_id,
-                        "service_status": service_status,
-                    }
-                )
-            )
         else:
             try:
                 conversations_table.update_item(
