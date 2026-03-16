@@ -1102,8 +1102,7 @@ def persist_message(
                         },
                     }
                 },
-            ],
-            ReturnCancellationReasons=True,
+            ]
         )
 
         tenant_info = get_tenant_info(
