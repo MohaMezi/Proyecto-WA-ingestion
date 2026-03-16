@@ -158,6 +158,7 @@ import hmac
 import json
 import logging
 import os
+from decimal import Decimal
 from time import time
 from typing import Any
 from urllib.parse import parse_qs
@@ -1025,6 +1026,8 @@ def persist_message(
         expires_at = (
             now + _DEDUP_TTL_HOURS * 3600
         )  # El TTL de DynamoDB se establece según la configuración para que los registros de deduplicación expiren automáticamente después de ese tiempo.
+        now_dec = Decimal(str(now))
+        expires_at_dec = Decimal(str(expires_at))
 
         try:
             message_text = get_message_body(body, channel_id)
@@ -1053,79 +1056,105 @@ def persist_message(
             )
             return {"statusCode": 400, "body": "Bad Request"}
 
-        # 1) Leer conversación existente (fuera de transacción)
-        resp = conversations_table.get_item(
-            Key={"channel_id": channel_id, "user_id": user_id}
-        )
-        
-        existing_item = resp.get("Item", {})
-        pending_msgs = existing_item.get("pending_messages", [])
-        message_times = existing_item.get("message_times", [])
-        
-        # Asegurar que sean listas (por si existen corruptos como Maps)
-        if not isinstance(pending_msgs, list):
-            pending_msgs = []
-        if not isinstance(message_times, list):
-            message_times = []
-        
-        # Append nuevos valores para la transacción
-        pending_msgs.append(message_text)
-        message_times.append(now)
-        
-        # Convertir a formato DynamoDB low-level para transact_write_items
-        pending_msgs_dynamo = {"L": [{"S": msg} for msg in pending_msgs]}
-        message_times_dynamo = {"L": [{"N": str(ts)} for ts in message_times]}
+        dedupe_created = False
 
-        # 2) Transacción atómica: deduplicación + guardar conversación
-        dynamodb.meta.client.transact_write_items(
-            TransactItems=[
-                # Deduplicación: insertar solo si no existe (channel_id, message_id)
-                {
-                    "Put": {
-                        "TableName": deduplication_table.name,
-                        "Item": {
-                            "channel_id": {"S": channel_id},
-                            "message_id": {"S": message_id},
-                            "created_at": {"N": str(now)},
-                            "expires_at": {"N": str(expires_at)},
-                        },
-                        "ConditionExpression": "attribute_not_exists(channel_id)",
-                    }
+        # 1) Crear deduplicación primero (idempotencia por channel_id + message_id)
+        try:
+            deduplication_table.put_item(
+                Item={
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "created_at": now_dec,
+                    "expires_at": expires_at_dec,
                 },
-                # Conversación: actualizar con valores previamente fusionados en Python
-                {
-                    "Update": {
-                        "TableName": conversations_table.name,
-                        "Key": {
-                            "channel_id": {"S": channel_id},
-                            "user_id": {"S": user_id},
-                        },
-                        "UpdateExpression": (
-                            "SET "
-                            "#pending = :pending_msgs, "
-                            "#times = :message_times, "
-                            "#status = :waiting, "
-                            "#last_time = :now, "
-                            "#expires = :expires_at"
-                        ),
-                        "ExpressionAttributeNames": {
-                            "#pending": "pending_messages",
-                            "#times": "message_times",
-                            "#status": "status",
-                            "#last_time": "last_message_time",
-                            "#expires": "expires_at",
-                        },
-                        "ExpressionAttributeValues": {
-                            ":pending_msgs": pending_msgs_dynamo,
-                            ":message_times": message_times_dynamo,
-                            ":waiting": {"S": "waiting"},
-                            ":now": {"N": str(now)},
-                            ":expires_at": {"N": str(expires_at)},
-                        },
-                    }
+                ConditionExpression="attribute_not_exists(channel_id)",
+            )
+            dedupe_created = True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return {"statusCode": 200, "body": "OK"}
+            raise
+
+        # 2) Guardar conversación y, si falla, deshacer deduplicación.
+        try:
+            resp = conversations_table.get_item(
+                Key={"channel_id": channel_id, "user_id": user_id}
+            )
+
+            existing_item = resp.get("Item", {})
+            pending_msgs_raw = existing_item.get("pending_messages", [])
+            message_times_raw = existing_item.get("message_times", [])
+
+            # Asegurar listas y normalizar posibles datos legacy/corruptos.
+            if not isinstance(pending_msgs_raw, list):
+                pending_msgs_raw = []
+            if not isinstance(message_times_raw, list):
+                message_times_raw = []
+
+            pending_msgs: list[str] = []
+            for msg in pending_msgs_raw:
+                if isinstance(msg, str):
+                    pending_msgs.append(msg)
+                elif isinstance(msg, dict) and isinstance(msg.get("S"), str):
+                    # Compatibilidad con registros antiguos guardados en formato low-level.
+                    pending_msgs.append(msg["S"])
+                elif msg is not None:
+                    pending_msgs.append(str(msg))
+
+            message_times: list[Decimal] = []
+            for ts in message_times_raw:
+                candidate = ts.get("N") if isinstance(ts, dict) else ts
+                try:
+                    message_times.append(Decimal(str(candidate)))
+                except (TypeError, ValueError):
+                    continue
+
+            pending_msgs.append(message_text)
+            message_times.append(now_dec)
+
+            conversations_table.update_item(
+                Key={"channel_id": channel_id, "user_id": user_id},
+                UpdateExpression=(
+                    "SET "
+                    "#pending = :pending_msgs, "
+                    "#times = :message_times, "
+                    "#status = :waiting, "
+                    "#last_time = :now, "
+                    "#expires = :expires_at"
+                ),
+                ExpressionAttributeNames={
+                    "#pending": "pending_messages",
+                    "#times": "message_times",
+                    "#status": "status",
+                    "#last_time": "last_message_time",
+                    "#expires": "expires_at",
                 },
-            ]
-        )
+                ExpressionAttributeValues={
+                    ":pending_msgs": pending_msgs,
+                    ":message_times": message_times,
+                    ":waiting": "waiting",
+                    ":now": now_dec,
+                    ":expires_at": expires_at_dec,
+                },
+            )
+        except Exception:
+            if dedupe_created:
+                try:
+                    deduplication_table.delete_item(
+                        Key={"channel_id": channel_id, "message_id": message_id}
+                    )
+                except Exception as rollback_error:
+                    logger.error(
+                        json.dumps(
+                            {
+                                "message": "Falló rollback de deduplicación tras error guardando conversación.",
+                                "channel_id": channel_id,
+                                "message_id": message_id,
+                                "rollback_error": str(rollback_error),
+                            }
+                        )
+                    )
+            raise
 
         tenant_info = get_tenant_info(
             tenant_id
