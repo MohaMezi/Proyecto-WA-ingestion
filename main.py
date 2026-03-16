@@ -219,7 +219,7 @@ _SQS_DELAY_SECONDS = int(
 )  # Número de segundos de delay al enviar mensajes a SQS.
 
 sm = boto3.client("ssm")
-dynamodb = boto3.client("dynamodb")
+dynamodb = boto3.resource("dynamodb")
 sqs = boto3.client("sqs")
 
 conversations_table = dynamodb.Table(f"{_DYNAMODB_TABLE_PREFIX}-conversations")
@@ -1382,8 +1382,8 @@ def get_channel_info(channel_id: str) -> dict:
 
     # Obtener desde DynamoDB si no está en cache o ha expirado.
     try:
-        resp = dynamodb.meta.client.get_item(
-            TableName=channels_table.name, Key={"channel_id": {"S": channel_id}}
+        resp = channels_table.get_item(
+            Key={"channel_id": channel_id}
         )
         channel_info = resp.get("Item", {})
         _CHANNELS_CACHE[channel_id] = (channel_info, now)  # Guardar en cache local
