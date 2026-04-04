@@ -1,3 +1,157 @@
+"""
+WEBHOOK POST WHATSAPP:
+
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "WABA_ID",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "PHONE_NUMBER",
+              "phone_number_id": "PHONE_NUMBER_ID"
+            },
+            "contacts": [
+              {
+                "profile": { "name": "USER_NAME" },
+                "wa_id": "USER_WA_ID"
+              }
+            ],
+            "messages": [
+              {
+                "from": "USER_WA_ID",
+                "id": "MESSAGE_ID",
+                "timestamp": "TIMESTAMP",
+                "type": "text",
+                "text": { "body": "MESSAGE_BODY" }
+              }
+            ],
+            "statuses": [
+              {
+                "id": "MESSAGE_ID",
+                "status": "delivered|read|sent|failed",
+                "timestamp": "TIMESTAMP",
+                "recipient_id": "USER_WA_ID"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+"""
+
+"""
+WEBHOOK POST MESSENGER/INSTAGRAM:
+
+{
+  "object": "page/instagram",
+  "entry": [
+    {
+      "id": "PAGE_ID",
+      "time": 1234567890,
+      "messaging": [
+        {
+          "sender": { "id": "USER_PSID" },
+          "recipient": { "id": "PAGE_ID" },
+          "timestamp": 1234567890,
+          "message": {
+            "mid": "MESSAGE_ID",
+            "text": "MESSAGE_BODY"
+          }
+        }
+      ]
+    }
+  ]
+}
+"""
+
+"""
+API GATEWAY EVENT:
+
+{
+  version: '2.0',
+  routeKey: '$default',
+  rawPath: '/my/path',
+  rawQueryString: 'parameter1=value1&parameter1=value2&parameter2=value',
+  cookies: [ 'cookie1', 'cookie2' ],
+  headers: {
+    'Header1': 'value1',
+    'Header2': 'value2'
+  },
+  queryStringParameters: { parameter1: 'value1,value2', parameter2: 'value' },
+  requestContext: {
+    accountId: '123456789012',
+    apiId: 'api-id',
+    authorizer: { jwt: {
+        claims: {'claim1': 'value1', 'claim2': 'value2'},
+        scopes: ['scope1', 'scope2']
+        }
+    },
+    domainName: 'id.execute-api.us-east-1.amazonaws.com',
+    domainPrefix: 'id',
+    http: {
+      method: 'POST',
+      path: '/my/path',
+      protocol: 'HTTP/1.1',
+      sourceIp: 'IP',
+      userAgent: 'agent'
+    },
+    requestId: 'id',
+    routeKey: '$default',
+    stage: '$default',
+    time: '12/Mar/2020:19:03:58 +0000',
+    timeEpoch: 1583348638390
+  },
+  body: 'Hello from Lambda',
+  pathParameters: {'parameter1': 'value1'},
+  isBase64Encoded: false,
+  stageVariables: {'stageVariable1': 'value1', 'stageVariable2': 'value2'}
+}
+"""
+
+"""
+WEBHOOK GET VERIFICATION:
+
+{
+  "version": "2.0",
+  "routeKey": "GET /webhook",
+  "rawPath": "/webhook",
+  "rawQueryString": "hub.mode=subscribe&hub.verify_token=TOKEN&hub.challenge=123",
+  "headers": {
+    "host": "...",
+    "user-agent": "facebookexternalhit/..."
+  },
+  "requestContext": {
+    "http": {
+      "method": "GET",
+      "path": "/webhook",
+      "sourceIp": "..."
+    }
+  },
+  "isBase64Encoded": false
+}
+"""
+
+"""PARÁMETRO EN AWS SYSTEMS MANAGER PARAMETER STORE:
+
+{
+  "ARN": "arn:aws:ssm:region:acct:parameter/nombre-del-parámetro",
+  "Name": "nombre-del-parámetro",
+  "Type": "String|StringList|SecureString",
+  "Value": "valor_del_parámetro",
+  "Version": 1,
+  "Selector": "",
+  "DataType": "text",
+  "LastModifiedDate": datetime(...)
+}
+"""
+
 import base64
 import hashlib
 import hmac
