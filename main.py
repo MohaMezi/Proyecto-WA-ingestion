@@ -111,12 +111,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     Excepciones:
       Exception: Se propaga cualquier error inesperado en extracción de datos o routing.
     """
-        request_id = getattr(context, "aws_request_id", "unknown") if context is not None else "unknown"
-        remaining_ms = (
-                getattr(context, "get_remaining_time_in_millis", lambda: -1)()
-                if context is not None
-                else -1
-        )
+    request_id = getattr(context, "aws_request_id", "unknown") if context is not None else "unknown"
+    remaining_ms = (
+            getattr(context, "get_remaining_time_in_millis", lambda: -1)()
+            if context is not None
+            else -1
+    )
     try:
         # La estructura del evento recibido desde API Gateway v2 está en la línea 75 del código.
         method = (
@@ -291,7 +291,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
     Excepciones:
       No propaga excepciones por defecto: captura errores operativos y devuelve respuesta HTTP.
     """
-        logger.info(json.dumps({"message": "process_post: starting"}))
+    logger.info(json.dumps({"message": "process_post: starting"}))
     # La estructura de los webhooks de Meta está en las líneas 2 y 50 del código.
     headers = event.get("headers") or {}
     headers = {
