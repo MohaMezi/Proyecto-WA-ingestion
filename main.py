@@ -74,8 +74,14 @@ deduplication_table = dynamodb.Table(f"{_DYNAMODB_TABLE_PREFIX}-deduplication")
 channels_table = dynamodb.Table(f"{_DYNAMODB_TABLE_PREFIX}-channels")
 tenants_table = dynamodb.Table(f"{_DYNAMODB_TABLE_PREFIX}-tenants")
 
-logger = logging.getLogger()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    force=True,
+)
+logger = logging.getLogger(__name__)
 logger.setLevel(getattr(logging, _LOG_LEVEL.upper(), logging.INFO))
+logger.info(json.dumps({"message": "Logger initialized", "level": _LOG_LEVEL}))
 
 _SECRETS: dict[str, tuple[str, float]] = {}
 _TENANTS_CACHE: dict[str, tuple[dict[str, Any], float]] = {}
@@ -105,6 +111,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     Excepciones:
       Exception: Se propaga cualquier error inesperado en extracción de datos o routing.
     """
+        request_id = getattr(context, "aws_request_id", "unknown") if context is not None else "unknown"
+        remaining_ms = (
+                getattr(context, "get_remaining_time_in_millis", lambda: -1)()
+                if context is not None
+                else -1
+        )
     try:
         # La estructura del evento recibido desde API Gateway v2 está en la línea 75 del código.
         method = (
@@ -114,6 +126,17 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         ).upper()
         raw_path = event.get("rawPath") or event.get("path") or "/"
         raw_qs = event.get("rawQueryString") or ""
+        logger.info(
+            json.dumps(
+                {
+                    "message": "Lambda handler invoked",
+                    "request_id": request_id,
+                    "remaining_ms": remaining_ms,
+                    "method": method,
+                    "raw_path": raw_path,
+                }
+            )
+        )
 
         # Comprobar que el endpoint es el esperado (en este caso, "/webhook/<env>").
         if raw_path != _WEBHOOK_PATH:
@@ -141,6 +164,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     try:
         # Comparar el método HTTP y procesar en consecuencia.
+        logger.info(
+            json.dumps(
+                {
+                    "message": "Webhook routing",
+                    "method": method,
+                    "raw_path": raw_path,
+                }
+            )
+        )
         match method:
             case "GET":
                 return process_get(raw_qs)
@@ -192,6 +224,14 @@ def process_get(raw_qs: str) -> dict[str, Any]:
       Exception: Cualquier error inesperado no controlado explícitamente.
     """
     params = parse_qs(raw_qs)
+    logger.info(
+        json.dumps(
+            {
+                "message": "process_get: starting",
+                "query_keys": sorted(params.keys()),
+            }
+        )
+    )
 
     # La estructura del webhook de verificación está en la línea 119 del código.
     mode = params.get("hub.mode")[0] if params.get("hub.mode") else None
@@ -215,6 +255,7 @@ def process_get(raw_qs: str) -> dict[str, Any]:
 
     # Comprobar que el modo es "subscribe", que el token es correcto y responder con el challenge.
     if mode and token and mode == "subscribe" and token == VERIFY_TOKEN:
+        logger.info(json.dumps({"message": "process_get: verification succeeded"}))
         return {"statusCode": 200, "body": challenge or ""}
     else:
         logger.warning(
@@ -250,6 +291,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
     Excepciones:
       No propaga excepciones por defecto: captura errores operativos y devuelve respuesta HTTP.
     """
+        logger.info(json.dumps({"message": "process_post: starting"}))
     # La estructura de los webhooks de Meta está en las líneas 2 y 50 del código.
     headers = event.get("headers") or {}
     headers = {
@@ -258,6 +300,14 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
 
     signature = headers.get("x-hub-signature-256") or ""
     raw_body = get_raw_body(event)
+    logger.info(
+        json.dumps(
+            {
+                "message": "process_post: raw body extracted",
+                "body_size_bytes": len(raw_body),
+            }
+        )
+    )
     try:
         body = json.loads(raw_body.decode("utf-8"))
     except json.JSONDecodeError as e:
@@ -271,6 +321,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(json.dumps({"message": "process_post: body decoded successfully"}))
 
     channel_id = get_channel_id(body)
     if channel_id.endswith("unknown"):
@@ -284,6 +335,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(json.dumps({"message": "process_post: channel extracted", "channel_id": channel_id}))
 
     message_id = get_message_id(body, channel_id)
     if message_id.endswith("unknown"):
@@ -297,6 +349,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(json.dumps({"message": "process_post: message extracted", "channel_id": channel_id, "message_id": message_id}))
 
     tenant_id = get_channel_info(channel_id).get("tenant_id", "default_tenant")
     if not tenant_id or tenant_id == "default_tenant":
@@ -310,6 +363,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(json.dumps({"message": "process_post: tenant resolved", "channel_id": channel_id, "tenant_id": tenant_id}))
 
     user_id = get_sender_id(body, channel_id)
     if not user_id or user_id.endswith("unknown"):
@@ -323,6 +377,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(json.dumps({"message": "process_post: sender extracted", "channel_id": channel_id, "user_id": user_id}))
 
     # Verificar la firma del webhook utilizando el APP SECRET correspondiente.
     if not verify_signature(raw_body, signature, tenant_id):
@@ -335,6 +390,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 403, "body": "Forbidden"}
+    logger.info(json.dumps({"message": "process_post: signature verified", "tenant_id": tenant_id}))
 
     # Verificar si el usuario está bloqueado antes de procesar el mensaje
     if is_user_blocked(user_id, channel_id):
@@ -364,6 +420,16 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         return {"statusCode": 400, "body": "Bad Request"}
+    logger.info(
+        json.dumps(
+            {
+                "message": "process_post: message body extracted",
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "message_length": len(message_text),
+            }
+        )
+    )
 
     if not message_text:
         logger.warning(
@@ -427,6 +493,17 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
 
     # Persistir el mensaje en DynamoDB, evitando duplicados.
     try:
+        logger.info(
+            json.dumps(
+                {
+                    "message": "process_post: persisting message",
+                    "tenant_id": tenant_id,
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "message_id": message_id,
+                }
+            )
+        )
         return persist_message(tenant_id, channel_id, message_id, user_id, body)
     except Exception as e:
         logger.error(
@@ -883,6 +960,17 @@ def post_reply(url: str, token: str, payload: dict) -> dict:
       requests.HTTPError: Si la respuesta HTTP indica error (se lanza `raise_for_status()`).
       requests.RequestException: Para errores de conexión o timeout.
     """
+    recipient = payload.get("to") or payload.get("recipient", {}).get("id")
+    logger.info(
+        json.dumps(
+            {
+                "message": "post_reply: sending message",
+                "url": url,
+                "recipient": recipient,
+                "timeout_seconds": _HTTP_REQUEST_TIMEOUT_SECONDS,
+            }
+        )
+    )
     r = requests.post(
         url,
         json=payload,
@@ -890,6 +978,15 @@ def post_reply(url: str, token: str, payload: dict) -> dict:
         timeout=_HTTP_REQUEST_TIMEOUT_SECONDS,
     )
     r.raise_for_status()
+    logger.info(
+        json.dumps(
+            {
+                "message": "post_reply: message sent",
+                "url": url,
+                "status_code": r.status_code,
+            }
+        )
+    )
     return r.json()
 
 
@@ -927,6 +1024,17 @@ def persist_message(
       - Re-lanza excepciones de boto3 que no sean ConditionalCheckFailedException.
     """
     try:
+        logger.info(
+            json.dumps(
+                {
+                    "message": "persist_message: starting",
+                    "tenant_id": tenant_id,
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "message_id": message_id,
+                }
+            )
+        )
         # Guardar el mensaje en la tabla de deduplicación para evitar procesar mensajes duplicados.
         now = time()
         expires_at = (
@@ -961,6 +1069,16 @@ def persist_message(
                 )
             )
             return {"statusCode": 400, "body": "Bad Request"}
+        logger.info(
+            json.dumps(
+                {
+                    "message": "persist_message: message body ready",
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "message_length": len(message_text),
+                }
+            )
+        )
 
         dedupe_created = False
 
@@ -976,8 +1094,26 @@ def persist_message(
                 ConditionExpression="attribute_not_exists(channel_id)",
             )
             dedupe_created = True
+            logger.info(
+                json.dumps(
+                    {
+                        "message": "persist_message: dedup record created",
+                        "channel_id": channel_id,
+                        "message_id": message_id,
+                    }
+                )
+            )
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                logger.info(
+                    json.dumps(
+                        {
+                            "message": "persist_message: duplicate message detected",
+                            "channel_id": channel_id,
+                            "message_id": message_id,
+                        }
+                    )
+                )
                 return {"statusCode": 200, "body": "OK"}
             raise
 
@@ -1047,6 +1183,17 @@ def persist_message(
                     ":expires_at": expires_at_dec,
                 },
             )
+            logger.info(
+                json.dumps(
+                    {
+                        "message": "persist_message: conversation updated",
+                        "channel_id": channel_id,
+                        "user_id": user_id,
+                        "status": new_status,
+                        "pending_count": len(pending_msgs),
+                    }
+                )
+            )
         except Exception:
             if dedupe_created:
                 try:
@@ -1073,6 +1220,15 @@ def persist_message(
         service_status = tenant_info.get(
             "service_status", "unknown"
         )  # El campo "service_status" en la tabla de tenants indica si el servicio para ese tenant está activo o no. Si no existe, se considera "unknown".
+        logger.info(
+            json.dumps(
+                {
+                    "message": "persist_message: tenant status resolved",
+                    "tenant_id": tenant_id,
+                    "service_status": service_status,
+                }
+            )
+        )
 
         if (
             service_status != _ACTIVE_SERVICE_STATUS
@@ -1103,6 +1259,18 @@ def persist_message(
 
         else:
             try:
+                logger.info(
+                    json.dumps(
+                        {
+                            "message": "persist_message: queueing message",
+                            "channel_id": channel_id,
+                            "user_id": user_id,
+                            "message_id": message_id,
+                            "queue_url_configured": bool(_QUEUE_URL),
+                            "delay_seconds": _SQS_DELAY_SECONDS,
+                        }
+                    )
+                )
                 conversations_table.update_item(
                     Key={
                         "channel_id": channel_id,
@@ -1156,11 +1324,32 @@ def persist_message(
                         },
                     )
                     return {"statusCode": 500, "body": "Internal Server Error"}
+                logger.info(
+                    json.dumps(
+                        {
+                            "message": "persist_message: message queued",
+                            "channel_id": channel_id,
+                            "user_id": user_id,
+                            "message_id": message_id,
+                            "sqs_message_id": sqs_response.get("MessageId", ""),
+                        }
+                    )
+                )
             except ClientError as e:
                 if (
                     e.response.get("Error", {}).get("Code")
                     == "ConditionalCheckFailedException"
                 ):
+                    logger.info(
+                        json.dumps(
+                            {
+                                "message": "persist_message: message already queued, updating queue_id",
+                                "channel_id": channel_id,
+                                "user_id": user_id,
+                                "message_id": message_id,
+                            }
+                        )
+                    )
                     conversations_table.update_item(
                         Key={
                             "channel_id": channel_id,
@@ -1230,8 +1419,17 @@ def verify_signature(raw_body: bytes, header_sig: str, tenant_id: str) -> bool:
       Utiliza hmac.compare_digest() para evitar timing attacks.
     """
     if not header_sig or not header_sig.startswith("sha256="):
+        logger.warning(
+            json.dumps(
+                {
+                    "message": "verify_signature: invalid signature header",
+                    "tenant_id": tenant_id,
+                }
+            )
+        )
         return False
 
+    logger.info(json.dumps({"message": "verify_signature: fetching app secret", "tenant_id": tenant_id}))
     APP_SECRET = get_secret(f"/{_ENV}/app_secret/{tenant_id}")
 
     if not APP_SECRET or APP_SECRET == "unknown":
@@ -1251,7 +1449,9 @@ def verify_signature(raw_body: bytes, header_sig: str, tenant_id: str) -> bool:
     ).hexdigest()
 
     # Compara la firma esperada con la recibida
-    return hmac.compare_digest(expected, received)
+    is_valid = hmac.compare_digest(expected, received)
+    logger.info(json.dumps({"message": "verify_signature: completed", "tenant_id": tenant_id, "is_valid": is_valid}))
+    return is_valid
 
 
 # Función para obtener la información del tenant desde DynamoDB, con cache local para reducir latencia en llamadas repetidas.
@@ -1278,13 +1478,16 @@ def get_tenant_info(tenant_id: str) -> dict:
     if tenant_id in _TENANTS_CACHE:
         tenant_info, ts = _TENANTS_CACHE[tenant_id]
         if now - ts < _CACHE_TTL_SECONDS:
+            logger.info(json.dumps({"message": "get_tenant_info: cache hit", "tenant_id": tenant_id}))
             return tenant_info
 
     # Obtener desde DynamoDB si no está en cache o ha expirado.
     try:
+        logger.info(json.dumps({"message": "get_tenant_info: fetching from DynamoDB", "tenant_id": tenant_id}))
         resp = tenants_table.get_item(Key={"tenant_id": tenant_id})
         tenant_info = resp.get("Item", {})
         _TENANTS_CACHE[tenant_id] = (tenant_info, now)  # Guardar en cache local
+        logger.info(json.dumps({"message": "get_tenant_info: fetched", "tenant_id": tenant_id, "found": bool(tenant_info)}))
         return tenant_info
     except ClientError as e:
         logger.warning(
@@ -1332,15 +1535,18 @@ def get_channel_info(channel_id: str) -> dict:
     if channel_id in _CHANNELS_CACHE:
         channel_info, ts = _CHANNELS_CACHE[channel_id]
         if now - ts < _CACHE_TTL_SECONDS:
+            logger.info(json.dumps({"message": "get_channel_info: cache hit", "channel_id": channel_id}))
             return channel_info
 
     # Obtener desde DynamoDB si no está en cache o ha expirado.
     try:
+        logger.info(json.dumps({"message": "get_channel_info: fetching from DynamoDB", "channel_id": channel_id}))
         resp = channels_table.get_item(
             Key={"channel_id": channel_id}
         )
         channel_info = resp.get("Item", {})
         _CHANNELS_CACHE[channel_id] = (channel_info, now)  # Guardar en cache local
+        logger.info(json.dumps({"message": "get_channel_info: fetched", "channel_id": channel_id, "found": bool(channel_info)}))
         return channel_info
     except ClientError as e:
         logger.warning(
@@ -1561,10 +1767,12 @@ def get_secret(secret_id: str) -> str:
     if secret_id in _SECRETS:
         value, ts = _SECRETS[secret_id]
         if now - ts < _CACHE_TTL_SECONDS:
+            logger.info(json.dumps({"message": "get_secret: cache hit", "secret_id": secret_id}))
             return value
 
     # Obtener desde Parameter Store si no está en cache o ha expirado.
     try:
+        logger.info(json.dumps({"message": "get_secret: fetching from SSM", "secret_id": secret_id}))
         resp = sm.get_parameter(Name=secret_id, WithDecryption=True)
     except ClientError as e:
         logger.warning(
@@ -1598,6 +1806,7 @@ def get_secret(secret_id: str) -> str:
         except Exception:
             # No debe fallar el flujo por cache; seguir devolviendo el valor.
             pass
+        logger.info(json.dumps({"message": "get_secret: fetched", "secret_id": secret_id, "has_value": bool(value)}))
         return value
 
     return "unknown"
