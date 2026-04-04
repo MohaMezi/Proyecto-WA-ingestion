@@ -990,6 +990,58 @@ def post_reply(url: str, token: str, payload: dict) -> dict:
     return r.json()
 
 
+def enqueue_processing_message(channel_id: str, user_id: str, message_id: str) -> dict[str, Any]:
+    """
+    Encola un mensaje para procesado asincrono en SQS.
+
+    Parámetros:
+      channel_id (str): Identificador del canal.
+      user_id (str): Identificador del usuario.
+      message_id (str): Identificador del mensaje a propagar.
+
+    Retorno:
+      dict[str, Any]: Respuesta devuelta por SQS.
+
+    Excepciones:
+      botocore.exceptions.ClientError: Si SQS rechaza la petición.
+    """
+    logger.info(
+        json.dumps(
+            {
+                "message": "enqueue_processing_message: sending to SQS",
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "message_id": message_id,
+                "queue_url_configured": bool(_QUEUE_URL),
+                "delay_seconds": _SQS_DELAY_SECONDS,
+            }
+        )
+    )
+    sqs_response = sqs.send_message(
+        QueueUrl=_QUEUE_URL,
+        DelaySeconds=_SQS_DELAY_SECONDS,
+        MessageBody=json.dumps(
+            {
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "message_id": message_id,
+            }
+        ),
+    )
+    logger.info(
+        json.dumps(
+            {
+                "message": "enqueue_processing_message: SQS accepted message",
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "message_id": message_id,
+                "sqs_message_id": sqs_response.get("MessageId", ""),
+            }
+        )
+    )
+    return sqs_response
+
+
 def persist_message(
     tenant_id: str, channel_id: str, message_id: str, user_id: str, body: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1259,18 +1311,6 @@ def persist_message(
 
         else:
             try:
-                logger.info(
-                    json.dumps(
-                        {
-                            "message": "persist_message: queueing message",
-                            "channel_id": channel_id,
-                            "user_id": user_id,
-                            "message_id": message_id,
-                            "queue_url_configured": bool(_QUEUE_URL),
-                            "delay_seconds": _SQS_DELAY_SECONDS,
-                        }
-                    )
-                )
                 conversations_table.update_item(
                     Key={
                         "channel_id": channel_id,
@@ -1284,17 +1324,7 @@ def persist_message(
                         ":mid": message_id,
                     },
                 )
-                sqs_response = sqs.send_message(
-                    QueueUrl=_QUEUE_URL,
-                    DelaySeconds=_SQS_DELAY_SECONDS,
-                    MessageBody=json.dumps(
-                        {
-                            "channel_id": channel_id,
-                            "user_id": user_id,
-                            "message_id": message_id,
-                        }
-                    ),
-                )
+                sqs_response = enqueue_processing_message(channel_id, user_id, message_id)
 
                 if (
                     sqs_response.get("ResponseMetadata", {}).get("HTTPStatusCode")
@@ -1358,6 +1388,20 @@ def persist_message(
                         UpdateExpression="SET queue_id = :mid",
                         ExpressionAttributeValues={":mid": message_id},
                     )
+                    try:
+                        enqueue_processing_message(channel_id, user_id, message_id)
+                    except ClientError as queue_error:
+                        logger.warning(
+                            json.dumps(
+                                {
+                                    "message": "persist_message: failed to enqueue refresh signal for already queued conversation",
+                                    "channel_id": channel_id,
+                                    "user_id": user_id,
+                                    "message_id": message_id,
+                                    "error": str(queue_error),
+                                }
+                            )
+                        )
 
         return {"statusCode": 200, "body": "OK"}
 
