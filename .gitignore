@@ -47,6 +47,3 @@ docker-compose.*.yaml
 prueba_signature.py
 trust-policy.json
 GUIA.md
-
-# Deploy script
-deploy.ps1
