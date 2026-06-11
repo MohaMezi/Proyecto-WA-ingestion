@@ -14,7 +14,7 @@ API Gateway HTTP API (la ruta exacta la define `WEBHOOK_PATH`):
 | `ENV` | Si | Prefijo de entorno para rutas SSM y tablas. | `dev` |
 | `WEBHOOK_PATH` | Si | Ruta exacta esperada del endpoint del webhook. | `/lambda-ingesta` |
 | `DYNAMODB_TABLE_PREFIX` | Si | Prefijo de tablas DynamoDB (`<prefix>-conversations`, `-deduplication`, `-channels`, `-tenants`). | `dev` |
-| `QUEUE_URL` | Si | URL de cola SQS para encolar mensajes a procesado. | `https://sqs.eu-south-2.amazonaws.com/185271206346/dev-mensajes` |
+| `QUEUE_URL` | Si | URL de cola SQS para encolar mensajes a procesado. | `https://sqs.<region>.amazonaws.com/<account-id>/dev-mensajes` |
 | `LOG_LEVEL` | No | Nivel de logging. | `INFO` |
 | `GRAPH_VERSION` | No | Version de Meta Graph API para respuestas salientes. | `v22.0` |
 | `CACHE_TTL_SECONDS` | No | TTL de cache en memoria para SSM/channels/tenants. | `300` |
