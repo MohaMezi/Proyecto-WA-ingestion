@@ -457,7 +457,7 @@ def process_post(event: dict[str, Any]) -> dict[str, Any]:
             )
         )
         try:
-            access_token = get_secret(f"/{_ENV}/access_token/{channel_id}")
+            access_token = get_secret(f"/{_ENV}/access_token/{str.replace(channel_id, ':', '-')}")
             if channel_id.startswith("wa:"):
                 phone_number_id = channel_id.split(":", 1)[1]
                 send_wa_reply(
@@ -1249,7 +1249,7 @@ def persist_message(
             if not inactive_message or inactive_message == "unknown":
                 inactive_message = _INACTIVE_SERVICE_MESSAGE  # Mensaje por defecto si no se ha configurado uno específíco para el tenant.
 
-            access_token = get_secret(f"/{_ENV}/access_token/{channel_id}")
+            access_token = get_secret(f"/{_ENV}/access_token/{str.replace(channel_id, ':', '-')}")
 
             if channel_id.startswith("wa:"):
                 phone_number_id = channel_id.split(":", 1)[1]
